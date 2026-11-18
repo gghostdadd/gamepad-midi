@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pad to MIDI</title>
+<style>
+:root {
+  --bg: #121316; --panel: #1b1d22; --line: #2c2f37; --text: #e6e7ea; --dim: #8b8f99;
+  --accent: #6ee7b7; --accent-ink: #0b2a1e; --warn: #fca5a5; --input: #101114;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #f4f4f2; --panel: #ffffff; --line: #dcdcd8; --text: #1b1c1f; --dim: #6b6e75;
+          --accent: #059669; --accent-ink: #ffffff; --warn: #b91c1c; --input: #fafaf9; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+       font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+main { max-width: 1000px; margin: 0 auto; padding: 20px 16px 48px; }
+header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--dim); margin: 26px 0 10px; }
+#status { color: var(--dim); }
+#status.bad { color: var(--warn); }
+.bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; margin-top: 16px;
+       background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.bar label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); }
+.bar label.check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 13px; padding-bottom: 6px; }
+select, input[type=number], button {
+  font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 8px; }
+input[type=number] { width: 64px; }
+select { max-width: 260px; }
+button { cursor: pointer; background: var(--panel); }
+button:hover { border-color: var(--dim); }
+.spacer { flex: 1; }
+#hint { color: var(--dim); margin: 12px 2px 0; }
+#hint b { color: var(--text); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+.tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+        display: flex; flex-direction: column; gap: 4px; transition: background .05s; }
+.tile .top { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); }
+.tile .nn { font-weight: 600; }
+.tile input { width: 100%; }
+.tile.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.tile.on .top { color: var(--accent-ink); }
+.axis { display: grid; grid-template-columns: 70px 140px 110px 1fr; gap: 10px; align-items: center;
+        background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
+.meter { position: relative; height: 10px; background: var(--input); border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+.meter i { position: absolute; top: 0; bottom: 0; width: 4px; margin-left: -2px; background: var(--accent); left: 50%; }
+.meter::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.fields { display: flex; flex-wrap: wrap; gap: 6px 10px; font-size: 12px; color: var(--dim); }
+.fields label { display: flex; align-items: center; gap: 4px; }
+.fields label.on { color: var(--accent); font-weight: 600; }
+.fields input { width: 56px; }
+#log { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+       font: 12px/1.5 ui-monospace, Menlo, monospace; height: 180px; overflow: auto; margin: 0; white-space: pre; }
+.empty { color: var(--dim); }
+.padpic { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px 12px; }
+#pic { display: block; width: 100%; max-width: 620px; margin: 0 auto; }
+#pic .body { fill: none; stroke: var(--dim); stroke-width: 2; }
+#pic .part { fill: var(--input); stroke: var(--dim); stroke-width: 1.5; cursor: pointer; transition: fill .04s; }
+#pic .lbl { fill: var(--dim); font: 600 10px ui-sans-serif, system-ui, sans-serif; text-anchor: middle;
+            dominant-baseline: central; pointer-events: none; }
+#pic g.unbound .part { stroke-dasharray: 3 3; opacity: .45; }
+#pic g.on .part { fill: var(--accent); stroke: var(--accent); }
+#pic g.on .lbl { fill: var(--accent-ink); }
+#pic g.stick.on .part { fill: var(--input); stroke-width: 3; }
+#pic g.learn .part { stroke: var(--warn); stroke-width: 3; animation: blink .7s steps(2) infinite; }
+#pic g:hover .part { stroke: var(--text); }
+@keyframes blink { 50% { stroke-opacity: .2; } }
+.picfoot { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 6px; }
+#picMsg { color: var(--dim); margin: 0; font-size: 13px; }
+#picMsg.learning { color: var(--warn); font-weight: 600; }
+@media (max-width: 640px) {
+  .axis { grid-template-columns: 60px 1fr; }
+  .axis .fields { grid-column: 1 / -1; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header><h1>Pad → MIDI</h1><span id="status">Starting…</span></header>
+
+  <div class="bar">
+    <label>Controller <select id="padSel"><option value="">(none yet)</option></select></label>
+    <label>MIDI output <select id="outSel"><option value="">(none)</option></select></label>
+    <label>Channel <input id="ch" type="number" min="1" max="16"></label>
+    <label>Velocity <input id="vel" type="number" min="1" max="127"></label>
+    <label class="check"><input type="checkbox" id="analogVel"> Analog buttons set velocity</label>
+    <span class="spacer"></span>
+    <label>First note <input id="base" type="number" min="0" max="127"></label>
+    <button id="renumber" title="Give every button and axis direction consecutive notes from the first note">Renumber</button>
+    <button id="panic">All notes off</button>
+  </div>
+  <p id="hint"></p>
+
+  <h2>Controller</h2>
+  <div class="padpic">
+    <svg id="pic" viewBox="60 30 480 345" role="img" aria-label="Controller diagram"></svg>
+    <div class="picfoot">
+      <p id="picMsg"></p>
+      <button id="picReset">Reset picture</button>
+    </div>
+  </div>
+
+  <h2>Buttons</h2>
+  <div id="buttons" class="grid"><span class="empty">Press any button on the controller.</span></div>
+
+  <h2>Axes and D-pad</h2>
+  <div id="axes"><span class="empty">—</span></div>
+
+  <h2>MIDI log</h2>
+  <pre id="log"></pre>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const noteName = n => NAMES[n % 12] + (Math.floor(n / 12) - 1);   // 60 = C4
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function load(k) { try { return JSON.parse(localStorage.getItem('padmidi:' + k)); } catch { return null; } }
+function store(k, v) { try { localStorage.setItem('padmidi:' + k, JSON.stringify(v)); } catch {} }
+
+const settings = Object.assign({ ch: 1, vel: 100, analogVel: false, outId: null, padId: null, base: 36 }, load('settings'));
+const saveSettings = () => store('settings', settings);
+
+let midi = null, out = null;
+let pad = null;          // current Gamepad snapshot
+let padKey = null;       // pad.id used for per-controller mapping
+let map = null;          // { buttons: [{note}], axes: [{mode, cc, neg, pos, hat:[u,r,d,l]}] }
+const held = new Map();  // key -> {note, ch}
+const lastCC = [];
+const ui = { nb: -1, na: -1, tiles: [], axes: [] };
+
+/* ---------- status / log ---------- */
+function status(msg, bad) { $('status').textContent = msg; $('status').className = bad ? 'bad' : ''; }
+const logLines = [];
+function log(line) {
+  logLines.push(line); if (logLines.length > 200) logLines.shift();
+  logDirty = true;
+}
+let logDirty = false;
+
+/* ---------- MIDI ---------- */
+async function initMidi() {
+  if (!navigator.requestMIDIAccess) { status('This browser has no Web MIDI. Open the page in Chrome or Edge.', true); return; }
+  try {
+    midi = await navigator.requestMIDIAccess();
+    midi.onstatechange = fillOutputs;
+    fillOutputs();
+  } catch (e) { status('MIDI access was refused: ' + e.message, true); }
+}
+function fillOutputs() {
+  const outs = [...midi.outputs.values()];
+  const sel = $('outSel');
+  const prev = sel.value || settings.outId;
+  sel.innerHTML = outs.length ? outs.map(o => `<option value="${esc(o.id)}">${esc(o.name)}</option>`).join('')
+                              : '<option value="">(no MIDI outputs)</option>';
+  if (outs.some(o => o.id === prev)) sel.value = prev;
+  pickOutput();
+}
+function pickOutput() {
+  const id = $('outSel').value;
+  const next = (midi && id) ? midi.outputs.get(id) : null;
+  if (next === out) return;
+  allNotesOff();
+  out = next;
+  if (out) { settings.outId = id; saveSettings(); }
+  updateHint();
+}
+function send(bytes) { if (out) { try { out.send(bytes); } catch (e) { log('send failed: ' + e.message); } } }
+
+function noteOn(key, note, vel) {
+  if (held.has(key)) return;
+  const ch = settings.ch;
+  held.set(key, { note, ch });
+  send([0x90 | (ch - 1), note, vel]);
+  log(`ch${ch}  note on   ${String(note).padStart(3)} ${noteName(note).padEnd(4)} vel ${vel}   (${key})`);
+}
+function noteOff(key) {
+  const h = held.get(key);
+  if (!h) return;
+  held.delete(key);
+  send([0x80 | (h.ch - 1), h.note, 0]);
+  log(`ch${h.ch}  note off  ${String(h.note).padStart(3)} ${noteName(h.note)}`);
+}
+function allNotesOff() {
+  for (const k of [...held.keys()]) noteOff(k);
+  if (out) for (let c = 0; c < 16; c++) send([0xB0 | c, 123, 0]);
+}
+
+/* ---------- mapping ---------- */
+function defaultMap(p) {
+  let n = settings.base;
+  const next = () => clamp(n++, 0, 127);
+  const m = { buttons: p.buttons.map(() => ({ note: next() })), axes: [] };
+  p.axes.forEach((v, i) => {
+    const a = { mode: 'notes', cc: clamp(20 + i, 0, 119), neg: 0, pos: 0, hat: [0, 0, 0, 0] };
+    if (v > 1.1) a.mode = 'hat';                       // POV hat resting at ~1.29
+    else if (p.mapping === 'standard') a.mode = 'cc';  // analog sticks
+    if (a.mode === 'hat') a.hat = [next(), next(), next(), next()];
+    else { a.neg = next(); a.pos = next(); }
+    m.axes.push(a);
+  });
+  m.pic = picDefaults(p, m);
+  return m;
+}
+
+/* ---------- controller picture ---------- */
+// Each part: [id, label, svg shape]. Sticks: ls/rs are the rings (bound to an x/y axis pair), l3/r3 the thumbs.
+const PARTS = [
+  ['lt', 'LT', '<rect x="110" y="42" width="120" height="24" rx="8"/>', 170, 54],
+  ['lb', 'LB', '<rect x="110" y="76" width="120" height="22" rx="8"/>', 170, 87],
+  ['rt', 'RT', '<rect x="370" y="42" width="120" height="24" rx="8"/>', 430, 54],
+  ['rb', 'RB', '<rect x="370" y="76" width="120" height="22" rx="8"/>', 430, 87],
+  ['select', 'Select', '<rect x="232" y="138" width="18" height="28" rx="7"/>', 241, 152],
+  ['start', 'Start', '<rect x="350" y="138" width="18" height="28" rx="7"/>', 359, 152],
+  ['touch', 'Pad', '<rect x="262" y="128" width="76" height="46" rx="8"/>', 300, 151],
+  ['home', 'Home', '<circle cx="300" cy="205" r="12"/>', 300, 205],
+  ['up', 'Up', '<rect x="138" y="160" width="24" height="26" rx="4"/>', 150, 173],
+  ['down', 'Down', '<rect x="138" y="206" width="24" height="26" rx="4"/>', 150, 219],
+  ['left', 'Left', '<rect x="113" y="184" width="27" height="24" rx="4"/>', 126, 196],
+  ['right', 'Right', '<rect x="160" y="184" width="27" height="24" rx="4"/>', 174, 196],
+  ['top', 'Top', '<circle cx="450" cy="164" r="16"/>', 450, 164],
+  ['bottom', 'Bottom', '<circle cx="450" cy="228" r="16"/>', 450, 228],
+  ['west', 'Left face', '<circle cx="418" cy="196" r="16"/>', 418, 196],
+  ['east', 'Right face', '<circle cx="482" cy="196" r="16"/>', 482, 196],
+  ['ls', 'Left stick', '<circle cx="225" cy="268" r="36"/>', 0, 0],
+  ['l3', 'L3', '<circle cx="225" cy="268" r="19"/>', 225, 268],
+  ['rs', 'Right stick', '<circle cx="375" cy="268" r="36"/>', 0, 0],
+  ['r3', 'R3', '<circle cx="375" cy="268" r="19"/>', 375, 268],
+];
+const isStick = id => id === 'ls' || id === 'rs';
+
+function picDefaults(p, m) {
+  const pic = {};
+  const nb = p.buttons.length, na = p.axes.length;
+  const btn = (id, i) => { if (i < nb) pic[id] = { t: 'b', i }; };
+  if (p.mapping === 'standard') {
+    [['bottom',0],['east',1],['west',2],['top',3],['lb',4],['rb',5],['lt',6],['rt',7],['select',8],['start',9],
+     ['l3',10],['r3',11],['up',12],['down',13],['left',14],['right',15],['home',16],['touch',17]].forEach(([id, i]) => btn(id, i));
+    if (na >= 2) pic.ls = { x: 0, y: 1 };
+    if (na >= 4) pic.rs = { x: 2, y: 3 };
+    return pic;
+  }
+  // Generic (DirectInput-style) pads: most cheap pads number their buttons like this.
+  [['top',0],['east',1],['bottom',2],['west',3],['lb',4],['rb',5],['lt',6],['rt',7],['select',8],['start',9],
+   ['l3',10],['r3',11],['home',12]].forEach(([id, i]) => btn(id, i));
+  const hat = m.axes.findIndex(a => a.mode === 'hat');
+  let free = p.axes.map((_, i) => i).filter(i => i !== hat);
+  if (hat >= 0) ['up','right','down','left'].forEach((id, d) => pic[id] = { t: 'h', i: hat, d });
+  else if (free.length >= 2) {
+    pic.up = { t: 'a', i: free[1], s: '-' }; pic.down = { t: 'a', i: free[1], s: '+' };
+    pic.left = { t: 'a', i: free[0], s: '-' }; pic.right = { t: 'a', i: free[0], s: '+' };
+    free = free.slice(2);
+  }
+  if (free.length >= 2) pic.ls = { x: free[0], y: free[1] };
+  if (free.length >= 4) pic.rs = { x: free[2], y: free[3] };
+  return pic;
+}
+
+const picEls = {};
+function buildPic() {
+  const body = '<path class="body" d="M150,118 C205,104 395,104 450,118 C520,134 546,170 561,250 C575,330 556,366 520,366 C482,366 466,334 444,322 C410,314 190,314 156,322 C134,334 118,366 80,366 C44,366 25,330 39,250 C54,170 80,134 150,118 Z"/>';
+  $('pic').innerHTML = body + PARTS.map(([id, name, shape, lx, ly]) =>
+    `<g data-part="${id}"${isStick(id) ? ' class="stick"' : ''}><title>${name}</title>${shape.replace(/^<(\w+)/, '<$1 class="part"')}` +
+    (lx ? `<text class="lbl" x="${lx}" y="${ly}"></text>` : '') + '</g>').join('');
+  $('pic').querySelectorAll('g[data-part]').forEach(g => {
+    const id = g.dataset.part;
+    picEls[id] = { g, text: g.querySelector('text'), title: g.querySelector('title'), lbl: null, name: PARTS.find(p => p[0] === id)[1] };
+    g.addEventListener('click', e => {
+      if (!map) return;
+      if (e.shiftKey) { delete map.pic[id]; saveMap(); stopLearn(); return; }
+      if (learning && learning.part === id) stopLearn(); else startLearn(id);
+    });
+  });
+  stopLearn();
+}
+
+let learning = null;
+function startLearn(id) {
+  if (!pad) return;
+  learning = { part: id, step: 0, axes: [...pad.axes], btns: pad.buttons.map(b => b.pressed) };
+  for (const k in picEls) picEls[k].g.classList.toggle('learn', k === id);
+  picMsg(isStick(id) ? `${picEls[id].name}: push the stick to the right…` : `${picEls[id].name}: press the button or direction it should show…`, true);
+}
+function stopLearn(msg) {
+  learning = null;
+  for (const k in picEls) picEls[k].g.classList.remove('learn');
+  picMsg(msg || 'Click a part, then press the control it should show. Shift-click clears a part. Esc cancels.');
+}
+function picMsg(t, on) { $('picMsg').textContent = t; $('picMsg').className = on ? 'learning' : ''; }
+
+function hatDirs(v) {   // -> [up,right,down,left] booleans
+  if (v > 1.05) return [0, 0, 0, 0];
+  return HAT_DIRS[((Math.round((v + 1) / (2 / 7)) % 8) + 8) % 8];
+}
+
+function handleLearn(p) {
+  const L = learning, id = L.part;
+  if (isStick(id)) {
+    let best = -1, bv = 0.5;
+    p.axes.forEach((v, i) => {
+      if (L.axes[i] > 1.1 || (L.step === 1 && i === L.x)) return;
+      const d = Math.abs(v - L.axes[i]); if (d > bv) { bv = d; best = i; }
+    });
+    if (best < 0) return;
+    if (L.step === 0) { L.x = best; L.step = 1; picMsg(`${picEls[id].name}: now push it down…`, true); }
+    else { map.pic[id] = { x: L.x, y: best }; saveMap(); stopLearn(`${picEls[id].name} set to axes ${L.x} / ${best}.`); }
+    return;
+  }
+  let src = null;
+  const bi = p.buttons.findIndex((b, i) => b.pressed && !L.btns[i]);
+  if (bi >= 0) src = { t: 'b', i: bi };
+  else p.axes.forEach((v, i) => {
+    if (src) return;
+    const base = L.axes[i];
+    if (base > 1.1) { const d = hatDirs(v).indexOf(1); if (d >= 0) src = { t: 'h', i, d }; }
+    else if (Math.abs(v - base) > 0.6) src = { t: 'a', i, s: v > base ? '+' : '-' };
+  });
+  if (!src) return;
+  map.pic[id] = src; saveMap();
+  stopLearn(`${picEls[id].name} set to ${srcName(src)}.`);
+}
+const srcName = s => s.t === 'b' ? `button B${s.i}` : s.t === 'h' ? `axis ${s.i} hat ${DIRS[s.d]}` : `axis ${s.i} ${s.s}`;
+
+function srcActive(s, p) {
+  if (s.t === 'b') return !!p.buttons[s.i]?.pressed;
+  const v = p.axes[s.i]; if (v === undefined) return false;
+  if (s.t === 'h') return !!hatDirs(v)[s.d];
+  return s.s === '-' ? v < -0.5 : v > 0.5;
+}
+function srcNote(s) {
+  if (s.t === 'b') return map.buttons[s.i]?.note;
+  const a = map.axes[s.i]; if (!a) return;
+  if (s.t === 'h') return a.mode === 'hat' ? a.hat[s.d] : undefined;
+  return a.mode === 'notes' ? (s.s === '-' ? a.neg : a.pos) : undefined;
+}
+
+function drawPic() {
+  const p = pad;
+  for (const [id, el] of Object.entries(picEls)) {
+    const s = map && map.pic[id];
+    let on = false, lbl = '', tip = el.name + ' — not set (click to learn)';
+    if (s && p) {
+      if (isStick(id)) {
+        const x = p.axes[s.x] ?? 0, y = p.axes[s.y] ?? 0;
+        on = Math.hypot(x, y) > 0.3;
+        const th = picEls[id === 'ls' ? 'l3' : 'r3'].g;
+        th.setAttribute('transform', `translate(${(clamp(x, -1, 1) * 17).toFixed(1)} ${(clamp(y, -1, 1) * 17).toFixed(1)})`);
+        tip = `${el.name} — axes ${s.x} / ${s.y}`;
+      } else {
+        on = srcActive(s, p);
+        const n = srcNote(s);
+        lbl = n === undefined ? '' : noteName(n);
+        tip = `${el.name} — ${srcName(s)}${n === undefined ? '' : ', note ' + n + ' ' + lbl}`;
+      }
+    }
+    el.g.classList.toggle('on', on);
+    el.g.classList.toggle('unbound', !s);
+    if (el.text && el.lbl !== lbl) { el.text.textContent = lbl; el.lbl = lbl; }
+    if (el.title.textContent !== tip) el.title.textContent = tip;
+  }
+}
+function renumber() {
+  if (!map) return;
+  let n = settings.base;
+  const next = () => clamp(n++, 0, 127);
+  map.buttons.forEach(b => b.note = next());
+  map.axes.forEach(a => { if (a.mode === 'hat') a.hat = [next(), next(), next(), next()];
+                          else if (a.mode === 'notes') { a.neg = next(); a.pos = next(); } });
+  allNotesOff(); saveMap(); buildUI(pad);
+}
+const saveMap = () => padKey && store('map:' + padKey, map);
+
+/* ---------- controller selection ---------- */
+function pads() { return navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : []; }
+function fillPads() {
+  const list = pads();
+  const sel = $('padSel');
+  const prev = sel.value;
+  sel.innerHTML = list.length ? list.map(p => `<option value="${p.index}">${esc(p.id)}</option>`).join('')
+                              : '<option value="">(press a button on the controller)</option>';
+  const keep = list.find(p => String(p.index) === prev) || list.find(p => p.id === settings.padId) || list[0];
+  if (keep) sel.value = keep.index;
+  selectPad();
+}
+function selectPad() {
+  const p = pads().find(p => String(p.index) === $('padSel').value) || null;
+  if (p && p.id === padKey) return;
+  allNotesOff();
+  lastCC.length = 0;
+  pad = p; padKey = p ? p.id : null;
+  if (p) {
+    settings.padId = p.id; saveSettings();
+    const saved = load('map:' + p.id);
+    map = (saved && saved.buttons.length === p.buttons.length && saved.axes.length === p.axes.length) ? saved : defaultMap(p);
+    if (!map.pic) map.pic = picDefaults(p, map);
+    saveMap();
+  } else map = null;
+  buildUI(p);
+  updateHint();
+}
+
+/* ---------- UI ---------- */
+function noteInput(value, onChange, title) {
+  const inp = document.createElement('input');
+  inp.type = 'number'; inp.min = 0; inp.max = 127; inp.value = value; if (title) inp.title = title;
+  inp.addEventListener('change', () => { const v = clamp(parseInt(inp.value) || 0, 0, 127); inp.value = v; onChange(v); saveMap(); });
+  return inp;
+}
+function buildUI(p) {
+  const bx = $('buttons'), ax = $('axes');
+  ui.tiles = []; ui.axes = [];
+  if (!p) {
+    bx.innerHTML = '<span class="empty">Press any button on the controller.</span>';
+    ax.innerHTML = '<span class="empty">—</span>';
+    ui.nb = ui.na = -1; return;
+  }
+  ui.nb = p.buttons.length; ui.na = p.axes.length;
+
+  bx.innerHTML = '';
+  map.buttons.forEach((b, i) => {
+    const t = document.createElement('div'); t.className = 'tile';
+    const top = document.createElement('div'); top.className = 'top';
+    const nn = document.createElement('span'); nn.className = 'nn'; nn.textContent = noteName(b.note);
+    top.innerHTML = `<span>B${i}</span>`; top.appendChild(nn);
+    t.append(top, noteInput(b.note, v => { noteOff('b' + i); b.note = v; nn.textContent = noteName(v); }, 'MIDI note'));
+    bx.appendChild(t); ui.tiles.push(t);
+  });
+  if (!map.buttons.length) bx.innerHTML = '<span class="empty">This controller reports no buttons.</span>';
+
+  ax.innerHTML = '';
+  map.axes.forEach((a, i) => {
+    const row = document.createElement('div'); row.className = 'axis';
+    const name = document.createElement('span'); name.textContent = 'Axis ' + i;
+    const meter = document.createElement('div'); meter.className = 'meter'; const dot = document.createElement('i'); meter.appendChild(dot);
+    const mode = document.createElement('select');
+    mode.innerHTML = '<option value="notes">Notes − / +</option><option value="hat">Hat (D-pad)</option><option value="cc">CC</option><option value="off">Off</option>';
+    mode.value = a.mode;
+    const fields = document.createElement('div'); fields.className = 'fields';
+    const r = { dot, fields, labels: {} };
+    const field = (label, key, value, set) => {
+      const l = document.createElement('label'); l.append(label + ' ', noteInput(value, v => { releaseAxis(i); set(v); }));
+      r.labels[key] = l; fields.appendChild(l);
+    };
+    const drawFields = () => {
+      fields.innerHTML = ''; r.labels = {};
+      if (a.mode === 'notes') { field('−', 'neg', a.neg, v => a.neg = v); field('+', 'pos', a.pos, v => a.pos = v); }
+      if (a.mode === 'hat') ['up','right','down','left'].forEach((d, k) => field(d, d, a.hat[k], v => a.hat[k] = v));
+      if (a.mode === 'cc') field('CC#', 'cc', a.cc, v => { a.cc = Math.min(v, 119); lastCC[i] = undefined; });
+    };
+    mode.addEventListener('change', () => {
+      releaseAxis(i); a.mode = mode.value; lastCC[i] = undefined;
+      if (a.mode === 'hat' && !a.hat.some(Boolean)) { const b = a.neg || settings.base; a.hat = [b, b + 1, b + 2, b + 3].map(n => clamp(n, 0, 127)); }
+      drawFields(); saveMap();
+    });
+    drawFields();
+    row.append(name, meter, mode, fields);
+    ax.appendChild(row); ui.axes.push(r);
+  });
+  if (!map.axes.length) ax.innerHTML = '<span class="empty">This controller reports no axes.</span>';
+}
+function releaseAxis(i) { for (const s of ['-', '+', 'up', 'right', 'down', 'left']) noteOff(`a${i}${s}`); }
+
+function updateHint() {
+  const h = $('hint');
+  if (!navigator.requestMIDIAccess) { h.innerHTML = ''; return; }
+  if (midi && midi.outputs.size === 0)
+    h.innerHTML = /Win/.test(navigator.platform)
+      ? 'No MIDI outputs found. To send to Resolume or a DAW on Windows, install <b>loopMIDI</b> (free, by Tobias Erichsen), add a port, then reload this page and pick it here.'
+      : 'No MIDI outputs found. To send to Resolume or a DAW on this Mac, open <b>Audio MIDI Setup → MIDI Studio → IAC Driver</b>, tick “Device is online”, then pick it here.';
+  else if (!pad)
+    h.innerHTML = 'Chrome only shows a controller after you <b>press a button</b> on it while this page is open.';
+  else
+    h.innerHTML = 'Keep this browser window visible (it can be behind other windows, just not minimized) or the browser may stop reading the controller.';
+  status(pad ? (out ? `${pad.id.replace(/\s*\(.*$/, '') || 'Controller'} → ${out.name}` : 'Controller ready, choose a MIDI output')
+             : 'Waiting for a controller', !out && !!midi && midi.outputs.size === 0);
+}
+
+/* ---------- polling ---------- */
+const HAT_DIRS = [[1,0,0,0],[1,1,0,0],[0,1,0,0],[0,1,1,0],[0,0,1,0],[0,0,1,1],[0,0,0,1],[1,0,0,1]]; // up,right,down,left
+const DIRS = ['up','right','down','left'];
+const axisDraw = [];
+
+function poll() {
+  if (!padKey) return;
+  const p = pads().find(q => q.id === padKey);
+  if (!p) return;
+  pad = p;
+  if (p.buttons.length !== ui.nb || p.axes.length !== ui.na) { map = defaultMap(p); saveMap(); buildUI(p); }
+  if (learning) handleLearn(p);
+
+  p.buttons.forEach((b, i) => {
+    const key = 'b' + i;
+    if (b.pressed) {
+      if (!held.has(key)) noteOn(key, map.buttons[i].note,
+        settings.analogVel && b.value > 0 && b.value < 1 ? clamp(Math.round(b.value * 127), 1, 127) : settings.vel);
+    } else noteOff(key);
+    ui.tiles[i]?.classList.toggle('on', b.pressed);
+  });
+
+  p.axes.forEach((v, i) => {
+    const a = map.axes[i]; axisDraw[i] = v;
+    if (a.mode === 'notes') {
+      for (const [s, sign, note] of [['-', -1, a.neg], ['+', 1, a.pos]]) {
+        const key = `a${i}${s}`, x = v * sign;
+        if (x > 0.5) noteOn(key, note, settings.vel); else if (x < 0.3) noteOff(key);
+      }
+    } else if (a.mode === 'hat') {
+      const idx = v <= 1.05 ? ((Math.round((v + 1) / (2 / 7)) % 8) + 8) % 8 : -1;
+      const on = idx < 0 ? [0,0,0,0] : HAT_DIRS[idx];
+      DIRS.forEach((d, k) => { const key = `a${i}${d}`; on[k] ? noteOn(key, a.hat[k], settings.vel) : noteOff(key); });
+    } else if (a.mode === 'cc') {
+      const val = clamp(Math.round((v + 1) / 2 * 127), 0, 127);
+      if (lastCC[i] !== val) {
+        lastCC[i] = val;
+        send([0xB0 | (settings.ch - 1), a.cc, val]);
+        log(`ch${settings.ch}  cc ${a.cc} = ${val}`);
+      }
+    }
+  });
+}
+
+function draw() {
+  drawPic();
+  ui.axes.forEach((r, i) => {
+    const v = axisDraw[i] ?? 0;
+    r.dot.style.left = (clamp((v + 1) / 2, 0, 1) * 100) + '%';
+    for (const [k, l] of Object.entries(r.labels)) {
+      const key = `a${i}${k === 'neg' ? '-' : k === 'pos' ? '+' : k}`;
+      l.classList.toggle('on', held.has(key));
+    }
+  });
+  if (logDirty) { const el = $('log'); el.textContent = logLines.join('\n'); el.scrollTop = el.scrollHeight; logDirty = false; }
+  requestAnimationFrame(draw);
+}
+
+/* A worker ticks the poll so it keeps running when the window is not focused
+   (main-thread timers and animation frames get throttled in background windows). */
+function startTicker() {
+  try {
+    const src = 'setInterval(() => postMessage(0), 4);';
+    const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    w.onmessage = poll;
+  } catch { setInterval(poll, 4); }
+}
+
+/* ---------- wire up ---------- */
+$('ch').value = settings.ch; $('vel').value = settings.vel; $('analogVel').checked = settings.analogVel; $('base').value = settings.base;
+$('ch').addEventListener('change', e => { allNotesOff(); settings.ch = clamp(parseInt(e.target.value) || 1, 1, 16); e.target.value = settings.ch; saveSettings(); });
+$('vel').addEventListener('change', e => { settings.vel = clamp(parseInt(e.target.value) || 100, 1, 127); e.target.value = settings.vel; saveSettings(); });
+$('analogVel').addEventListener('change', e => { settings.analogVel = e.target.checked; saveSettings(); });
+$('base').addEventListener('change', e => { settings.base = clamp(parseInt(e.target.value) || 0, 0, 127); e.target.value = settings.base; saveSettings(); });
+$('renumber').addEventListener('click', renumber);
+$('panic').addEventListener('click', () => { allNotesOff(); log('— all notes off —'); });
+$('outSel').addEventListener('change', pickOutput);
+$('padSel').addEventListener('change', selectPad);
+window.addEventListener('gamepadconnected', fillPads);
+window.addEventListener('gamepaddisconnected', fillPads);
+window.addEventListener('beforeunload', allNotesOff);
+window.addEventListener('keydown', e => { if (e.key === 'Escape' && learning) stopLearn(); });
+$('picReset').addEventListener('click', () => { if (pad && map) { map.pic = picDefaults(pad, map); saveMap(); stopLearn('Picture reset to the default layout.'); } });
+buildPic();
+
+if (!navigator.getGamepads) status('This browser has no Gamepad API.', true);
+initMidi().then(() => { fillPads(); updateHint(); });
+startTicker();
+requestAnimationFrame(draw);
+</script>
+</body>
+</html>
